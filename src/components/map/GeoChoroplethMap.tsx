@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Minus, Plus, RotateCcw } from 'lucide-react'
+import { Globe, Minus, Plus, RotateCcw } from 'lucide-react'
 import type { LocalityDataItem } from '../../types/election'
 import {
   formatInt,
@@ -792,6 +792,14 @@ export function GeoChoroplethMap({
     return { left: `${left}px`, top: `${top}px` }
   }, [tooltipPos])
 
+  // Exterior (localidade "ZZ" de Presidente): não tem contorno no mapa, então aparece
+  // como um encarte no canto, com a mesma cor e o mesmo clique de uma UF.
+  const exterior =
+    scope === 'uf'
+      ? localities.find((l) => l.code_tse === 'ZZ' || l.uf === 'ZZ')
+      : undefined
+  const exteriorTemVotos = (exterior?.valid_votes_2t ?? 0) > 0
+
   // Identificação do candidato líder na localidade sob hover
   const isCand1Leader = hoveredLoc ? (hoveredLoc.cand1_pct_2t ?? 0) >= (hoveredLoc.cand2_pct_2t ?? 0) : false
   const isCand2Leader = hoveredLoc ? (hoveredLoc.cand2_pct_2t ?? 0) > (hoveredLoc.cand1_pct_2t ?? 0) : false
@@ -874,6 +882,57 @@ export function GeoChoroplethMap({
           <RotateCcw className="h-3.5 w-3.5" />
         </button>
       </div>
+
+      {/* Encarte do Exterior (votos de brasileiros fora do país) */}
+      {exterior && (
+        <button
+          type="button"
+          data-testid="map-exterior-inset"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => onSelectLocality(exterior)}
+          aria-label={`Exterior: ${formatPct(exterior.pct_counted)} das seções apuradas${
+            exteriorTemVotos
+              ? `; ${cand1Name ?? 'candidato 1'} ${formatPct(exterior.cand1_pct_2t)}, ${cand2Name ?? 'candidato 2'} ${formatPct(exterior.cand2_pct_2t)}`
+              : '; aguardando votos'
+          }. Ver detalhes`}
+          title="Votos do exterior — ver detalhes"
+          className={`absolute bottom-3 left-3 z-30 flex items-center gap-2 rounded-xl border bg-[#050505]/90 p-1 text-left shadow-2xl backdrop-blur-md transition hover:bg-[#050505] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60 sm:p-1.5 sm:pr-2.5 ${
+            selectedCode === exterior.code_tse ? 'border-white/80' : 'border-white/15'
+          }`}
+        >
+          <span
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ring-1 ring-white/20"
+            style={{
+              backgroundColor: getFeatureFill(exterior),
+              opacity: exterior.low_reliability ? 0.72 : 1,
+            }}
+            aria-hidden="true"
+          >
+            <Globe className="h-5 w-5 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]" />
+          </span>
+          {/* No celular o mapa é pequeno: fica só o quadrado com o globo (sem cobrir o Sul) */}
+          <span className="hidden leading-tight sm:block" aria-hidden="true">
+            <span className="block text-[11px] font-bold text-white">Exterior</span>
+            {exteriorTemVotos ? (
+              <span className="flex items-center gap-1.5 text-[10px] font-semibold tabular-nums text-slate-200">
+                <span className="inline-flex items-center gap-0.5">
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: cand1Hex }} />
+                  {formatPct(exterior.cand1_pct_2t, 1)}
+                </span>
+                <span className="inline-flex items-center gap-0.5">
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: cand2Hex }} />
+                  {formatPct(exterior.cand2_pct_2t, 1)}
+                </span>
+              </span>
+            ) : (
+              <span className="block text-[10px] text-slate-300">Aguardando votos</span>
+            )}
+            <span className="block text-[10px] text-slate-400">
+              {formatPct(exterior.pct_counted, 1)} apurado
+            </span>
+          </span>
+        </button>
+      )}
 
       {/* Botão legado para redefinir zoom quando focado */}
       {viewBox.isZoomed && onResetFocus && (

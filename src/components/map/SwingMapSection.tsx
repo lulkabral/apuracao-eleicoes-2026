@@ -171,7 +171,7 @@ export function SwingMapSection({
     }
   }, [])
 
-  // Carrega malha municipal (<uf>-mun.topo.json ou /geo/municipios/<uf>.json) e dados municipais da UF sob demanda sem piscar no polling
+  // Carrega malha municipal (<uf>-mun.topo.json) e dados municipais da UF sob demanda sem piscar no polling
   useEffect(() => {
     if (!zoomedUf || zoomedUf === 'BR' || zoomedUf === 'ZZ') {
       setMunFeatures([])
@@ -191,11 +191,7 @@ export function SwingMapSection({
     const loadMunicipalData = async () => {
       try {
         const geoPromise = needNewGeo
-          ? fetch(`/geo/municipios/${ufLower}.json`)
-              .then((res) =>
-                res.ok ? res : fetch(`/geo/mun/${ufLower}-mun.topo.json`),
-              )
-              .catch(() => fetch(`/geo/mun/${ufLower}-mun.topo.json`))
+          ? fetch(`/geo/mun/${ufLower}-mun.topo.json`)
           : Promise.resolve(null)
         const basePrefix =
           stage === 'live' ? '/snapshots' : `/snapshots/stages/${stage}`

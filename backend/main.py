@@ -6,6 +6,7 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 import json
 import os
+import re
 import time
 from typing import Any
 
@@ -49,6 +50,13 @@ class AppState:
 
 def create_app(custom_settings: Settings | None = None, start_poller: bool = True) -> FastAPI:
     state = AppState(custom_settings)
+
+    # Trava de segurança: simulação nunca pode rodar com a configuração de produção,
+    # porque usa os MESMOS códigos de eleição (6258/6260) e grava no mesmo diretório.
+    if os.getenv("APP_ENV") == "production" and state.settings.tse_source_mode != "live":
+        raise RuntimeError(
+            "APP_ENV=production exige TSE_SOURCE_MODE=live. Simulação só fora de produção."
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -100,10 +108,31 @@ def create_app(custom_settings: Settings | None = None, start_poller: bool = Tru
     # Rate Limiting simples por IP em memória (janela deslizante de 60s)
     ip_buckets: dict[str, deque[float]] = defaultdict(deque)
 
+    def _real_client_ip(request: Request) -> str:
+        # Atrás de Cloudflare/Caddy, request.client.host é o IP do PROXY (o mesmo para todos).
+        # Só confie nestes cabeçalhos porque a origem aceita tráfego apenas do proxy.
+        return (
+            request.headers.get("cf-connecting-ip")
+            or request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+            or (request.client.host if request.client else "unknown")
+        )
+
     @app.middleware("http")
     async def rate_limit_and_cache_headers(request: Request, call_next):
-        client_ip = request.client.host if request.client else "unknown"
+        # Arquivos estáticos e healthcheck ficam fora do limite (quem protege é o CDN).
+        if request.url.path.startswith("/snapshots/") or request.url.path == "/health":
+            response = await call_next(request)
+            if request.url.path.startswith("/snapshots/"):
+                # Sem s-maxage: no Cloudflare, s-maxage desliga stale-while-revalidate/stale-if-error.
+                response.headers["Cache-Control"] = (
+                    "public, max-age=15, stale-while-revalidate=30, stale-if-error=3600"
+                )
+            return response
+
+        client_ip = _real_client_ip(request)
         now = time.time()
+        if len(ip_buckets) > 50_000:  # evita crescimento infinito de memória
+            ip_buckets.clear()
         bucket = ip_buckets[client_ip]
         while bucket and (now - bucket[0]) > 60.0:
             bucket.popleft()
@@ -140,13 +169,22 @@ def create_app(custom_settings: Settings | None = None, start_poller: bool = Tru
         }
 
     @app.get("/api/v1/status")
-    async def system_status() -> dict[str, Any]:
+    async def system_status(request: Request) -> dict[str, Any]:
         now = time.time()
         last_ok = state.poller.last_success_ts
-        staleness = await state.alert_manager.check_and_notify_staleness(last_ok)
+        # Não dispara alertas a cada visita (o loop do poller já faz isso).
+        elapsed = round(now - last_ok, 1) if last_ok else None
+        staleness = {
+            "stale": bool(elapsed and elapsed >= state.settings.stale_warning_seconds),
+            "critical_stale": bool(elapsed and elapsed >= state.settings.alert_stale_seconds),
+            "elapsed_seconds": elapsed,
+        }
         poller_summary = state.db.get_poller_state("summary") or {}
-        recent_events = state.db.get_recent_events(limit=25)
-        recent_errors = state.db.get_recent_events(limit=10, level="ERROR")
+        # Eventos internos (URLs, mensagens de erro) só com o token de operação.
+        ops_token = os.getenv("OPS_TOKEN", "")
+        is_ops = bool(ops_token) and request.headers.get("x-ops-token") == ops_token
+        recent_events = state.db.get_recent_events(limit=25) if is_ops else []
+        recent_errors = state.db.get_recent_events(limit=10, level="ERROR") if is_ops else []
 
         return {
             "service": "Apuração 2º Turno 2026",
@@ -178,13 +216,16 @@ def create_app(custom_settings: Settings | None = None, start_poller: bool = Tru
     async def get_catalog() -> dict[str, Any]:
         cat_path = state.settings.snapshot_dir / "catalog.json"
         if not cat_path.exists():
-            cat = await state.poller.run_single_cycle()
-            return cat.model_dump()
+            # Requisição pública nunca dispara coleta no TSE.
+            raise HTTPException(status_code=503, detail="Catálogo ainda não publicado.")
         return json.loads(cat_path.read_text(encoding="utf-8"))
 
     @app.get("/api/v1/disputes/{dispute_id}")
     async def get_dispute_snapshot(dispute_id: str, request: Request) -> Response:
-        snap_path = state.settings.snapshot_dir / dispute_id.lower() / "latest.json"
+        dispute_id = dispute_id.lower()
+        if dispute_id != "presidente" and not re.fullmatch(r"governador-[a-z]{2}", dispute_id):
+            raise HTTPException(status_code=404, detail="Disputa inválida.")
+        snap_path = state.settings.snapshot_dir / dispute_id / "latest.json"
         if not snap_path.exists():
             snap = state.db.get_latest_snapshot(dispute_id.lower())
             if snap is None:
@@ -204,12 +245,17 @@ def create_app(custom_settings: Settings | None = None, start_poller: bool = Tru
                 headers={
                     "Content-Encoding": "br",
                     "Cache-Control": "public, max-age=30, stale-while-revalidate=60",
+                    # Sem Vary, o CDN pode entregar Brotli a quem não suporta (tela em branco).
+                    "Vary": "Accept-Encoding",
                 },
             )
         return Response(
             content=raw_bytes,
             media_type="application/json",
-            headers={"Cache-Control": "public, max-age=30, stale-while-revalidate=60"},
+            headers={
+                "Cache-Control": "public, max-age=30, stale-while-revalidate=60",
+                "Vary": "Accept-Encoding",
+            },
         )
 
     @app.get("/api/v1/disputes/{dispute_id}/turnaround")
@@ -247,27 +293,20 @@ def create_app(custom_settings: Settings | None = None, start_poller: bool = Tru
         uf_l = uf.lower().strip()
         if len(uf_l) != 2:
             raise HTTPException(status_code=400, detail="Sigla de UF inválida.")
-        mun_snap_path = (
-            state.settings.snapshot_dir / "presidente" / f"mun-{uf_l}.json"
-        )
-        if mun_snap_path.exists() and (time.time() - mun_snap_path.stat().st_mtime) < 60:
-            return json.loads(mun_snap_path.read_text(encoding="utf-8"))
-
-        items = await state.poller.get_or_build_pres_municipalities_for_uf(uf_l)
-        payload = {
-            "dispute_id": "presidente",
-            "uf": uf_l.upper(),
-            "generated_at_hms": time.strftime("%H:%M:%S"),
-            "municipalities": items,
-        }
-        _atomic_write_json(mun_snap_path, payload)
-        return payload
+        # Só lê o arquivo que o poller pré-gera (publish_pres_municipal_files).
+        # Antes, qualquer visitante podia disparar centenas de downloads no TSE.
+        mun_snap_path = state.settings.snapshot_dir / "presidente" / "mun" / f"{uf_l}.json"
+        if not mun_snap_path.exists():
+            raise HTTPException(status_code=404, detail="Municípios ainda não publicados.")
+        data = json.loads(mun_snap_path.read_text(encoding="utf-8"))
+        data.setdefault("municipalities", data.get("localities", []))
+        return data
 
     @app.get("/api/v1/replay/2022")
     async def get_replay_2022() -> dict[str, Any]:
         replay_path = state.settings.snapshot_dir / "replay-2022" / "presidente.json"
         if not replay_path.exists():
-            await state.poller.initialize()
+            raise HTTPException(status_code=503, detail="Replay ainda não publicado.")
         return json.loads(replay_path.read_text(encoding="utf-8"))
 
     # Monta o diretório de snapshots estáticos em /snapshots para servir localmente como CDN

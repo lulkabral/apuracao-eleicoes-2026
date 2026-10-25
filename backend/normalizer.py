@@ -443,8 +443,11 @@ def build_dispute_snapshot(
             election_code_2t, cargo_code, uf_l, cycle=settings.tse_cycle
         ),
         source_portal_url=client.url_portal_tse(election_code_2t, uf_l),
+        # Horário exibido = horário da TOTALIZAÇÃO do TSE (campo ht do EA20), não o relógio
+        # do servidor. Se o TSE parar de atualizar, o horário na tela para junto.
         fixed_banner_text=(
-            f"Resultado parcial até 100% das urnas apuradas. Fonte: TSE. Atualizado às {hms}"
+            "Resultado parcial até 100% das urnas apuradas. Fonte: TSE. "
+            f"Totalização TSE às {macro_2t['ht'] or hms}"
         ),
         sections=sections,
         electorate=electorate,

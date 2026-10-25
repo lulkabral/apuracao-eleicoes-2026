@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Clock, History, Play } from 'lucide-react'
 import type { SimulationStage } from '../../hooks/useElectionSnapshot'
+import { SIMULATION_ENABLED } from '../../utils/flags'
 
 interface CountdownPre17hProps {
   onStartReplay2022: () => void
@@ -73,14 +74,17 @@ export function CountdownPre17h({
           Assistir Replay 2º Turno 2022
         </button>
 
-        <button
-          type="button"
-          onClick={() => onSelectSimulatedStage('live')}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-        >
-          <Play className="h-3.5 w-3.5" aria-hidden="true" />
-          Simular Apuração em 65%
-        </button>
+        {/* Antes chamava 'live' (não fazia nada). Agora usa o estágio 65% e só existe fora de produção. */}
+        {SIMULATION_ENABLED && (
+          <button
+            type="button"
+            onClick={() => onSelectSimulatedStage('65pct')}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+          >
+            <Play className="h-3.5 w-3.5" aria-hidden="true" />
+            Simular Apuração em 65%
+          </button>
+        )}
       </div>
     </section>
   )

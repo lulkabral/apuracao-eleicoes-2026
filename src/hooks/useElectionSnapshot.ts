@@ -19,7 +19,8 @@ const STALE_THRESHOLD_MS = 180_000 // 3 minutos
 
 function getCachedSnapshot(disputeId: string): DisputeSnapshot | null {
   try {
-    const raw = window.localStorage.getItem(`apuracao2026_snap_${disputeId}`)
+    // v2: descarta caches antigos que podem conter os dados simulados publicados antes.
+    const raw = window.localStorage.getItem(`apuracao2026_snap_v2_${disputeId}`)
     if (raw) {
       return JSON.parse(raw) as DisputeSnapshot
     }
@@ -32,7 +33,7 @@ function getCachedSnapshot(disputeId: string): DisputeSnapshot | null {
 function saveCachedSnapshot(disputeId: string, snap: DisputeSnapshot): void {
   try {
     window.localStorage.setItem(
-      `apuracao2026_snap_${disputeId}`,
+      `apuracao2026_snap_v2_${disputeId}`,
       JSON.stringify(snap),
     )
   } catch {
@@ -124,13 +125,27 @@ export function useElectionSnapshot(
   useEffect(() => {
     void loadSnapshotAndCatalog()
 
+    // Jitter de até 5 s: evita milhares de abas batendo no CDN no mesmo segundo.
+    const jitterMs = Math.floor(Math.random() * 5_000)
     const pollTimer = window.setInterval(() => {
-      if (!isReplayMode) {
+      // Aba em segundo plano não gasta requisições (nem bateria do celular).
+      if (!isReplayMode && document.visibilityState === 'visible') {
         void loadSnapshotAndCatalog()
       }
-    }, POLL_INTERVAL_MS)
+    }, POLL_INTERVAL_MS + jitterMs)
 
-    return () => window.clearInterval(pollTimer)
+    // Ao voltar para a aba, atualiza na hora.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && !isReplayMode) {
+        void loadSnapshotAndCatalog()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+
+    return () => {
+      window.clearInterval(pollTimer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [loadSnapshotAndCatalog, isReplayMode])
 
   // Verifica atraso > 3 minutos sem disparar re-renders a cada segundo quando tudo está em dia

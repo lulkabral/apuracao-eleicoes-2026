@@ -16,6 +16,15 @@ __pycache__/
 *$py.class
 *.sqlite-wal
 *.sqlite-shm
+*.sqlite
+*.db
+
+# Saída do poller (gerada em runtime; nunca versionar — o repositório tinha dados simulados aqui)
+public/snapshots/catalog.json
+public/snapshots/status.json
+public/snapshots/load_test_report.json
+public/snapshots/presidente/
+public/snapshots/governador-*/
 
 # Testing & Cache
 .pytest_cache/
@@ -26,6 +35,9 @@ test-results/
 .env
 .env.local
 .env.*.local
+
+# Certificado de origem do Cloudflare (chave privada) usado pelo Caddy na VM
+deploy/certs/
 
 # Logs
 logs/
@@ -41,3 +53,6 @@ pnpm-debug.log*
 .DS_Store
 *.swp
 *.swo
+
+# Dados simulados antigos tirados do caminho (não versionar, não usar como reais)
+.simulado-antigo/

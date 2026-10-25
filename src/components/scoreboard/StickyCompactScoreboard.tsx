@@ -546,7 +546,10 @@ export function StickyCompactScoreboard({
               <span className="font-sans tabular-nums whitespace-nowrap">
                 {leader
                   ? `Diferença de ${formatCompactNumber(voteDiff)} votos, +${formatPP(marginPP)} ${formatDisplayName(leaderShort)}`
-                  : 'Empate técnico'}
+                  : // "Empate técnico" é termo de pesquisa; aqui há contagem exata (M5)
+                    snapshot.votes.valid_votes === 0
+                    ? 'Aguardando votos'
+                    : 'Empate'}
               </span>
             </div>
           </div>

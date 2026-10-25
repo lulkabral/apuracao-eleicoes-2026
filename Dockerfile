@@ -18,17 +18,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Instala dependências Python do backend
-COPY requirements.txt ./
+# Instala só as dependências do backend (o requirements.txt da raiz traz playwright/pytest)
+COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copia código do backend, cache do 1º turno e snapshots/avatares estáticos iniciais
+# Copia apenas o código do backend e a base REAL do 1º turno (baseline_1t_2026.json).
+# NÃO copie public/snapshots nem bancos SQLite: no repositório eles contêm dados SIMULADOS.
+# O .dockerignore reforça essa regra.
 COPY backend ./backend
-COPY public/snapshots ./public/snapshots
-COPY public/avatars ./public/avatars
-COPY public/geo ./public/geo
-COPY public/flags ./public/flags
+# Scripts de operação (pré-aquecimento e reset), rodados com "docker compose run"
+COPY scripts/reset_producao.py scripts/prewarm_municipios.py ./scripts/
 
 # Cria diretório de dados SQLite persistente
 RUN mkdir -p /app/backend/data

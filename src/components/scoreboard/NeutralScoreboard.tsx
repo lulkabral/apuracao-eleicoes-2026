@@ -383,7 +383,8 @@ export function NeutralScoreboard({
               </span>
             ) : (
               <span className="font-mono text-[11px] font-semibold text-slate-400">
-                Empate técnico
+                {/* "Empate técnico" é termo de pesquisa; aqui há contagem exata */}
+                {votes.valid_votes === 0 ? 'Aguardando votos' : 'Empate'}
               </span>
             )}
           </div>

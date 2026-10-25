@@ -500,7 +500,7 @@ export function MarginTimelineChart({
                     )
                   }
                   return (
-                    <span className="text-slate-500 font-medium">Empate técnico</span>
+                    <span className="text-slate-500 font-medium">Empate</span>
                   )
                 })()}
               </div>

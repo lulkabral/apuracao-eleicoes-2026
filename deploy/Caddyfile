@@ -1,0 +1,46 @@
+# Servidor web da VM: entrega o site (dist/) e os snapshots gerados pelo poller na MESMA origem.
+# O Cloudflare fica na frente (proxy laranja) e absorve o tráfego; a VM só vê poucas req/s.
+{
+	email voce@seudominio.com.br
+}
+
+apuracao.seudominio.com.br {
+	# Certificado de Origem do Cloudflare (SSL/TLS > Origin Server), modo "Full (strict)"
+	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin.key
+	encode zstd gzip
+
+	# Snapshots publicados pelo poller (volume compartilhado). Sem s-maxage de propósito:
+	# no Cloudflare ele desativa stale-while-revalidate e stale-if-error.
+	handle /snapshots/* {
+		root * /srv
+		header Cache-Control "public, max-age=15, stale-while-revalidate=30, stale-if-error=3600"
+		file_server
+	}
+
+	# A API do FastAPI não é pública em produção.
+	handle /api/* {
+		respond "Not found" 404
+	}
+
+	# Arquivos com hash no nome: cache de 1 ano
+	handle /assets/* {
+		root * /srv/site
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	@static path /geo/* /flags/* /avatars/* /icons/*
+	handle @static {
+		root * /srv/site
+		header Cache-Control "public, max-age=86400"
+		file_server
+	}
+
+	# SPA: /presidente, /governador/xx etc. caem no index.html
+	handle {
+		root * /srv/site
+		header Cache-Control "public, max-age=60, must-revalidate"
+		try_files {path} /index.html
+		file_server
+	}
+}

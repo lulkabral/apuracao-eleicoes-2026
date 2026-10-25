@@ -41,7 +41,8 @@ export function StatusPage({
     let active = true
     const fetchStatus = async () => {
       try {
-        const res = await fetch('/api/v1/status', { cache: 'no-cache' })
+        // status.json é publicado pelo poller a cada ciclo e servido pelo CDN (a /api não é pública).
+        const res = await fetch('/snapshots/status.json', { cache: 'no-cache' })
         if (res.ok) {
           const data = (await res.json()) as OperationalStatusResponse
           if (active) {
@@ -193,7 +194,7 @@ export function StatusPage({
           </p>
           <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
             {apiStatus
-              ? `HTTP 304 (ETag): ${formatInt(apiStatus.tse_client_stats.not_modified_304)} · Erros: ${formatInt(apiStatus.consecutive_errors)}`
+              ? `HTTP 304 (ETag): ${formatInt(apiStatus.tse_client_stats?.not_modified_304)} · Erros: ${formatInt(apiStatus.consecutive_errors)}`
               : 'Leitura direta de arquivos JSON estáticos pré-validados'}
           </p>
         </div>

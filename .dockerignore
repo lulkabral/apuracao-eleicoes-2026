@@ -1,0 +1,9 @@
+# Nunca levar dados simulados/gerados para a imagem de produção
+backend/data/*.sqlite*
+backend/data/*.db
+public/snapshots
+node_modules
+dist
+.venv
+**/__pycache__
+.git

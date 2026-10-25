@@ -23,7 +23,7 @@ from backend.fixtures_2022 import (
 )
 from backend.models import DisputeSnapshot, ElectionCatalogSnapshot
 from backend.normalizer import build_dispute_snapshot
-from backend.publisher import SnapshotPublisher
+from backend.publisher import SnapshotPublisher, _atomic_write_json
 from backend.tse_client import DiscoveredElectionConfig, TSEClient, UF_NAMES
 
 
@@ -56,6 +56,13 @@ class ElectionPoller:
         self._cached_cands_2t_meta: dict[str, list[dict[str, Any]]] = {}
         self._task: asyncio.Task[None] | None = None
         self._running: bool = False
+        # Impede dois ciclos simultâneos (loop + chamada manual) escrevendo os mesmos arquivos.
+        self._cycle_lock = asyncio.Lock()
+
+    def _forget_ab_timestamps(self, prefix: str) -> None:
+        """Força rebaixar no próximo ciclo as localidades cujo timestamp começa com `prefix`."""
+        for key in [k for k in self._last_ab_timestamps if k.startswith(prefix)]:
+            del self._last_ab_timestamps[key]
 
     async def initialize(self) -> DiscoveredElectionConfig:
         """Executa descoberta inicial do pleito, carrega cache do 1º turno e gera pacote Replay 2022."""
@@ -73,8 +80,23 @@ class ElectionPoller:
         sim_hms: str | None = None,
         force_exact_tie: bool = False,
     ) -> ElectionCatalogSnapshot:
+        """Executa um ciclo completo (serializado por lock)."""
+        async with self._cycle_lock:
+            return await self._run_single_cycle_unlocked(
+                sim_progress=sim_progress,
+                sim_hms=sim_hms,
+                force_exact_tie=force_exact_tie,
+            )
+
+    async def _run_single_cycle_unlocked(
+        self,
+        sim_progress: float | None = None,
+        sim_hms: str | None = None,
+        force_exact_tie: bool = False,
+    ) -> ElectionCatalogSnapshot:
         """Executa um ciclo completo de atualização para Presidente e todos os Governadores em 2º turno."""
         t0 = time.time()
+        self.client.cycle_fallbacks.clear()
         try:
             if self.discovered is None:
                 await self.initialize()
@@ -84,27 +106,44 @@ class ElectionPoller:
             base_data = self.baseline_store.data
             published_snapshots: list[DisputeSnapshot] = []
 
-            # 1. Coleta e processa disputa Presidencial ("presidente")
-            pres_snap = await self._process_presidente(
-                discovered=discovered,
-                base_data=base_data,
-                sim_progress=sim_progress,
-                sim_hms=sim_hms,
-                force_exact_tie=force_exact_tie,
-            )
-            published_snapshots.append(pres_snap)
-
-            # 2. Coleta e processa cada disputa de Governador descoberta em ele-c.json
+            # Cada disputa é isolada: erro em Governador-XX não derruba Presidente nem as demais.
+            sim_kwargs: dict[str, Any] = {
+                "discovered": discovered,
+                "base_data": base_data,
+                "sim_progress": sim_progress,
+                "sim_hms": sim_hms,
+                "force_exact_tie": force_exact_tie,
+            }
+            jobs: list[tuple[str, Any]] = [
+                ("presidente", lambda: self._process_presidente(**sim_kwargs))
+            ]
             for uf_code in discovered.gov_2t_ufs:
-                gov_snap = await self._process_governador_uf(
-                    uf_code=uf_code,
-                    discovered=discovered,
-                    base_data=base_data,
-                    sim_progress=sim_progress,
-                    sim_hms=sim_hms,
-                    force_exact_tie=force_exact_tie,
+                jobs.append(
+                    (
+                        f"governador-{uf_code.lower()}",
+                        lambda uf_code=uf_code: self._process_governador_uf(
+                            uf_code=uf_code, **sim_kwargs
+                        ),
+                    )
                 )
-                published_snapshots.append(gov_snap)
+
+            failed: list[str] = []
+            for dispute_id, job in jobs:
+                try:
+                    published_snapshots.append(await job())
+                except Exception as exc:
+                    failed.append(dispute_id)
+                    self.db.log_event(
+                        level="ERROR",
+                        component="poller",
+                        message=f"{dispute_id} falhou neste ciclo; mantendo o último snapshot válido: {exc}",
+                    )
+                    kept = self.db.get_latest_snapshot(dispute_id)
+                    if kept is not None:
+                        published_snapshots.append(kept)
+
+            if not published_snapshots:
+                raise RuntimeError("Nenhuma disputa pôde ser processada neste ciclo.")
 
             now = time.time()
             hms = sim_hms or time.strftime("%H:%M:%S", time.localtime(now))
@@ -118,7 +157,22 @@ class ElectionPoller:
             )
 
             self.cycle_count += 1
-            self.last_success_ts = now
+            tse_fallbacks = len(self.client.cycle_fallbacks)
+            # Só é "sucesso" se TODAS as disputas processaram e NENHUM arquivo veio do cache por
+            # erro. Assim o alerta de 5 min dispara quando o TSE/rede cair, em vez de o site
+            # seguir dizendo "atualizado" com dado velho.
+            if not failed and tse_fallbacks == 0:
+                self.last_success_ts = now
+            else:
+                self.db.log_event(
+                    level="ERROR",
+                    component="poller",
+                    message=(
+                        f"Ciclo parcial: {len(failed)} disputa(s) com erro, "
+                        f"{tse_fallbacks} arquivo(s) do TSE servidos do cache local."
+                    ),
+                    details={"failed": failed, "fallback_urls": self.client.cycle_fallbacks[:20]},
+                )
             duration_ms = round((now - t0) * 1000.0, 1)
 
             self.db.set_poller_state(
@@ -131,6 +185,24 @@ class ElectionPoller:
                     "last_duration_ms": duration_ms,
                     "discovered_gov_ufs": discovered.gov_2t_ufs,
                     "source_mode": self.settings.tse_source_mode,
+                },
+            )
+            # status.json público (formato que a StatusPage espera), servido pelo CDN.
+            healthy = self.last_success_ts == now
+            _atomic_write_json(
+                self.settings.snapshot_dir / "status.json",
+                {
+                    "status": "healthy" if healthy else "degraded",
+                    "running": self._running,
+                    "poll_cycles": self.cycle_count,
+                    "consecutive_errors": len(failed) + tse_fallbacks,
+                    "last_poll_iso": iso,
+                    "last_success_iso": (
+                        time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(self.last_success_ts))
+                        if self.last_success_ts
+                        else None
+                    ),
+                    "tse_client_stats": dict(self.client.stats),
                 },
             )
             return catalog
@@ -204,6 +276,7 @@ class ElectionPoller:
 
             cached_ufs = self._cached_child_2t.setdefault(dispute_id, {})
             ufs_to_fetch: list[str] = []
+            pending_ts: dict[str, str] = {}
 
             for abr_item in br_ab_payload.get("abr", []):
                 uf_c = str(abr_item.get("cdabr", "")).lower()
@@ -216,21 +289,33 @@ class ElectionPoller:
                     or self._last_ab_timestamps.get(ab_key) != dt_ht
                 ):
                     ufs_to_fetch.append(uf_c)
-                    self._last_ab_timestamps[ab_key] = dt_ht
+                    # O timestamp só é gravado DEPOIS que o download der certo (abaixo).
+                    pending_ts[ab_key] = dt_ht
 
             if ufs_to_fetch:
                 async def _fetch_uf_2t(u_code: str) -> tuple[str, dict[str, Any]]:
                     url = self.client.url_resultado_u(
                         discovered.pres_code_2t, "1", u_code, cycle=discovered.cycle
                     )
-                    pay = await self.client.fetch_json(url)
+                    pay = await self.client.fetch_json(url, raise_on_error=True)
                     return u_code, extract_ea20_summary(pay)
 
+                # return_exceptions=True: uma UF com erro não derruba as outras 26.
                 fetched_list = await asyncio.gather(
-                    *[_fetch_uf_2t(u) for u in ufs_to_fetch]
+                    *[_fetch_uf_2t(u) for u in ufs_to_fetch], return_exceptions=True
                 )
-                for u_code, summary in fetched_list:
-                    cached_ufs[u_code] = summary
+                for u_code, result in zip(ufs_to_fetch, fetched_list):
+                    if isinstance(result, BaseException):
+                        # Conta como "não atualizado" (impede marcar o ciclo como 100% ok).
+                        self.client.cycle_fallbacks.append(f"presidente/{u_code}")
+                        self.db.log_event(
+                            level="WARNING",
+                            component="poller",
+                            message=f"Presidente/{u_code.upper()}: download falhou, nova tentativa no próximo ciclo: {result}",
+                        )
+                        continue
+                    cached_ufs[u_code] = result[1]
+                    self._last_ab_timestamps[f"pres_uf_{u_code}"] = pending_ts[f"pres_uf_{u_code}"]
 
             child_2t_summaries = cached_ufs
 
@@ -257,7 +342,11 @@ class ElectionPoller:
             override_hms=sim_hms,
         )
 
-        _, published_snap = self.publisher.validate_and_publish(candidate_snap)
+        val_result, published_snap = self.publisher.validate_and_publish(candidate_snap)
+        if not val_result.is_valid or val_result.warnings:
+            # Sem isso, uma UF que veio "atrasada" da CDN ficava presa no cache e travava a
+            # disputa em "Atualização em verificação" até o TSE mudar aquela UF de novo.
+            self._forget_ab_timestamps("pres_uf_")
         return published_snap
 
     async def _process_governador_uf(
@@ -322,6 +411,7 @@ class ElectionPoller:
 
             cached_muns = self._cached_child_2t.setdefault(dispute_id, {})
             muns_to_fetch: list[str] = []
+            pending_ts: dict[str, str] = {}
 
             for abr_item in uf_ab_payload.get("abr", []):
                 if str(abr_item.get("tpabr")) != "mun":
@@ -353,7 +443,7 @@ class ElectionPoller:
                     self._last_ab_timestamps[ab_key] = dt_ht
                 elif self._last_ab_timestamps.get(ab_key) != dt_ht:
                     muns_to_fetch.append(m_cd)
-                    self._last_ab_timestamps[ab_key] = dt_ht
+                    pending_ts[ab_key] = dt_ht  # gravado só após sucesso
 
             if muns_to_fetch:
                 async def _fetch_mun_2t(m_code: str) -> tuple[str, dict[str, Any]]:
@@ -364,14 +454,24 @@ class ElectionPoller:
                         m_code,
                         cycle=discovered.cycle,
                     )
-                    pay = await self.client.fetch_json(url)
+                    pay = await self.client.fetch_json(url, raise_on_error=True)
                     return m_code, extract_ea20_summary(pay)
 
                 fetched_muns = await asyncio.gather(
-                    *[_fetch_mun_2t(m) for m in muns_to_fetch]
+                    *[_fetch_mun_2t(m) for m in muns_to_fetch], return_exceptions=True
                 )
-                for m_code, summary in fetched_muns:
-                    cached_muns[m_code] = summary
+                for m_code, result in zip(muns_to_fetch, fetched_muns):
+                    if isinstance(result, BaseException):
+                        self.client.cycle_fallbacks.append(f"governador-{uf_l}/{m_code}")
+                        self.db.log_event(
+                            level="WARNING",
+                            component="poller",
+                            message=f"Governador-{uf_l.upper()}/{m_code}: download falhou, nova tentativa no próximo ciclo: {result}",
+                        )
+                        continue
+                    cached_muns[m_code] = result[1]
+                    key = f"gov_{uf_l}_{m_code}"
+                    self._last_ab_timestamps[key] = pending_ts[key]
 
             child_2t_summaries = cached_muns
 
@@ -398,7 +498,9 @@ class ElectionPoller:
             override_hms=sim_hms,
         )
 
-        _, published_snap = self.publisher.validate_and_publish(candidate_snap)
+        val_result, published_snap = self.publisher.validate_and_publish(candidate_snap)
+        if not val_result.is_valid or val_result.warnings:
+            self._forget_ab_timestamps(f"gov_{uf_l}_")
         return published_snap
 
     async def _get_2t_candidates_meta(
@@ -537,6 +639,39 @@ class ElectionPoller:
             )
         return items
 
+    async def publish_pres_municipal_files(self) -> None:
+        """Gera presidente/mun/<uf>.json com dados REAIS (EA15 + 1º turno).
+
+        Substitui os arquivos simulados versionados. Votos do 2º turno por município não são
+        baixados (seriam 5.570 arquivos por ciclo); o mapa municipal fica cinza ("sem votos")
+        em vez de mostrar números inventados, e o ranking "Onde falta contar" usa o % apurado real.
+        """
+        if self.discovered is None:
+            return
+        out_dir = self.settings.snapshot_dir / "presidente" / "mun"
+        for uf_l in sorted(self.baseline_store.data.get("municipalities_by_uf", {})):
+            if uf_l in {"zz", "br"}:
+                continue
+            try:
+                items = await self.get_or_build_pres_municipalities_for_uf(uf_l)
+            except Exception as exc:
+                self.db.log_event(
+                    level="WARNING",
+                    component="poller",
+                    message=f"Municípios de {uf_l.upper()} não publicados neste ciclo: {exc}",
+                )
+                continue
+            _atomic_write_json(
+                out_dir / f"{uf_l}.json",
+                {
+                    "dispute_id": "presidente",
+                    "uf": uf_l.upper(),
+                    "uf_name": UF_NAMES.get(uf_l, uf_l.upper()),
+                    "generated_at_hms": time.strftime("%H:%M:%S"),
+                    "localities": items,
+                },
+            )
+
     def start_background_loop(self) -> None:
         if self._running:
             return
@@ -557,7 +692,14 @@ class ElectionPoller:
         while self._running:
             try:
                 await self.run_single_cycle()
-            except Exception:
-                pass
+                # A cada ~5 min (e logo no 1º ciclo) atualiza os 27 arquivos municipais de Presidente.
+                last_mun = getattr(self, "_last_mun_publish_ts", 0.0)
+                if self.settings.tse_source_mode == "live" and time.time() - last_mun >= 300:
+                    self._last_mun_publish_ts = time.time()
+                    await self.publish_pres_municipal_files()
+            except Exception as exc:
+                self.db.log_event(
+                    level="ERROR", component="poller", message=f"Falha no loop: {exc}"
+                )
             await self.alert_manager.check_and_notify_staleness(self.last_success_ts)
             await asyncio.sleep(self.settings.tse_poll_interval_seconds)

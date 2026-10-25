@@ -6,7 +6,7 @@ Simula o pico de acessos simultâneos entre 17h e 22h no dia da eleição (25/10
   e os endpoints operacionais (`/health`, `/api/v1/status`, `/api/v1/disputes/{id}`).
 - Dispara 2.000 requisições HTTP com 100 clientes simultâneos.
 - Verifica taxa de sucesso (100% HTTP 200), latências p50/p95/p99, throughput (req/s) e cabeçalhos.
-- Grava o relatório auditável em `public/snapshots/load_test_report.json`.
+- Grava o relatório auditável em `docs/relatorios/load_test_report.json` (fora de `public/`).
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ if str(ROOT_DIR) not in sys.path:
 from backend.config import Settings
 from backend.main import create_app
 
-REPORT_PATH = ROOT_DIR / "public" / "snapshots" / "load_test_report.json"
+REPORT_PATH = ROOT_DIR / "docs" / "relatorios" / "load_test_report.json"
 
 
 async def run_load_test(
@@ -122,6 +122,7 @@ async def run_load_test(
         "tse_requests_triggered_by_users": 0,
     }
 
+    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text(
         json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
     )

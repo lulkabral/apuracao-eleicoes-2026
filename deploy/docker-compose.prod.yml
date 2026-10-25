@@ -1,0 +1,53 @@
+# Uso (na VM, dentro da pasta do projeto):
+#   npm ci && npm run build:prod
+#   docker compose -f deploy/docker-compose.prod.yml up -d --build
+services:
+  poller:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      TSE_SOURCE_MODE: live
+      TSE_BASE_URL: https://resultados.tse.jus.br
+      TSE_ENVIRONMENT: oficial
+      TSE_CYCLE: ele2026
+      TSE_POLL_INTERVAL_SECONDS: "60"
+      TSE_MIN_FILE_INTERVAL_SECONDS: "50"
+      TSE_MAX_CONCURRENT_REQUESTS: "8"
+      FEATURE_REFERENCE_SCENARIO: "false"
+      FEATURE_NARRATOR: "true"
+      FEATURE_REPLAY: "true"
+      ALERT_TELEGRAM_BOT_TOKEN: ${ALERT_TELEGRAM_BOT_TOKEN:-}
+      ALERT_TELEGRAM_CHAT_ID: ${ALERT_TELEGRAM_CHAT_ID:-}
+      OPS_TOKEN: ${OPS_TOKEN:-}
+    volumes:
+      - data:/app/backend/data
+      - snapshots:/app/public/snapshots
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    # porta 8000 NÃO é publicada: ninguém de fora acessa a API
+
+  web:
+    image: caddy:2.8
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs:/etc/caddy/certs:ro
+      - ../dist:/srv/site:ro
+      - snapshots:/srv/snapshots:ro
+      - caddy_data:/data
+    depends_on:
+      - poller
+
+volumes:
+  data:
+  snapshots:
+  caddy_data:

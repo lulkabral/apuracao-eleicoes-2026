@@ -87,6 +87,9 @@ class TSEClient:
         self.db = db
         self._semaphore = asyncio.Semaphore(settings.tse_max_concurrent_requests)
         self._client: httpx.AsyncClient | None = None
+        # URLs que, neste ciclo, falharam e foram servidas do cache local (dado possivelmente velho)
+        self.cycle_fallbacks: list[str] = []
+        self.stats = {"requests_total": 0, "not_modified_304": 0, "errors_total": 0}
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -196,6 +199,7 @@ class TSEClient:
         url: str,
         min_interval_seconds: int | None = None,
         force_refresh: bool = False,
+        raise_on_error: bool = False,
     ) -> dict[str, Any]:
         """Busca um arquivo JSON do TSE respeitando o intervalo mínimo e os cabeçalhos condicionais."""
         interval = (
@@ -224,8 +228,10 @@ class TSEClient:
             try:
                 client = await self._get_client()
                 resp = await client.get(url, headers=headers)
+                self.stats["requests_total"] += 1
 
                 if resp.status_code == 304 and cached is not None:
+                    self.stats["not_modified_304"] += 1
                     self.db.touch_http_cache(url, checked_ts=time.time())
                     return cached["payload"]
 
@@ -250,7 +256,10 @@ class TSEClient:
                     message=f"Falha ao consultar {url}: {exc}",
                     details={"url": url, "has_cache_fallback": cached is not None},
                 )
-                if cached is not None:
+                self.stats["errors_total"] += 1
+                if cached is not None and not raise_on_error:
+                    # Continua servindo o último dado, mas AVISA o poller que ele pode estar velho.
+                    self.cycle_fallbacks.append(url)
                     return cached["payload"]
                 raise
 

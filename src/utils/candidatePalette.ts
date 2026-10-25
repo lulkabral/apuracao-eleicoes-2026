@@ -142,21 +142,17 @@ const THEMES: Record<ThemeColorKey, CandidateVisualTheme> = {
 function resolvePrimaryPartyKey(
   partyAcronym: string,
   number: string,
-  ballotName: string,
+  _ballotName: string,
 ): ThemeColorKey {
+  // Cor pela legenda (sigla/número oficial do TSE), nunca pelo nome: "CADU DE LULA" ou
+  // sobrenomes de família não definem partido.
   const party = (partyAcronym || '').toUpperCase().trim()
-  const name = (ballotName || '').toUpperCase().trim()
   const num = (number || '').trim()
 
-  if (party === 'PT' || num === '13' || name.includes('LULA')) {
+  if (party === 'PT' || num === '13') {
     return 'red'
   }
-  if (
-    party === 'PL' ||
-    num === '22' ||
-    name.includes('FLAVIO') ||
-    name.includes('BOLSONARO')
-  ) {
+  if (party === 'PL' || num === '22') {
     return 'blue'
   }
   if (party === 'MDB' || num === '15') {

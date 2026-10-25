@@ -141,20 +141,23 @@ def validate_snapshot(
                     f"Regressão nos votos do candidato {c.ballot_name} ({c.number}): {c.votes} < anterior {prev_v}."
                 )
 
+        # O TSE avisa que os EA20 de UFs/municípios podem ficar dessincronizados por alguns
+        # segundos na CDN. Regressão em UMA localidade vira aviso (o poller rebaixa no próximo
+        # ciclo); só a regressão do total da disputa (acima) bloqueia a publicação.
         prev_locs = {loc.code_tse: loc for loc in previous_snapshot.localities}
         for loc in candidate_snapshot.localities:
             p_loc = prev_locs.get(loc.code_tse)
             if p_loc is not None:
                 if loc.pct_counted + 1e-6 < p_loc.pct_counted:
-                    errors.append(
+                    warnings.append(
                         f"Regressão de % apurado em {loc.name} ({loc.code_tse}): {loc.pct_counted}% < {p_loc.pct_counted}%."
                     )
                 if loc.turnout_votes_2t < p_loc.turnout_votes_2t:
-                    errors.append(
+                    warnings.append(
                         f"Regressão de votos em {loc.name} ({loc.code_tse}): {loc.turnout_votes_2t} < {p_loc.turnout_votes_2t}."
                     )
                 if loc.cand1_votes_2t < p_loc.cand1_votes_2t or loc.cand2_votes_2t < p_loc.cand2_votes_2t:
-                    errors.append(
+                    warnings.append(
                         f"Regressão de votos por candidato em {loc.name} ({loc.code_tse})."
                     )
 

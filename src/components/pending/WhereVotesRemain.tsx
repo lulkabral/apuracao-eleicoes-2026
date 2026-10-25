@@ -202,7 +202,7 @@ export function WhereVotesRemain({ snapshot }: WhereVotesRemainProps) {
           >
             <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700 dark:text-zinc-300">
               <span className={`h-2 w-2 shrink-0 rounded-full ${theme1.barClass}`} aria-hidden="true" />
-              <span>{cand1.ballot_name.includes('LULA') ? 'LULA' : formatOfficialCandidateName(cand1.ballot_name)} no 1ºT</span>
+              <span>Onde {formatOfficialCandidateName(cand1.ballot_name)} liderou no 1ºT</span>
             </div>
             <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white tracking-tight font-mono">
               {formatCompactNumber(pending.remaining_in_cand1_1t_lead)} ({formatPct(pending.pct_remaining_in_cand1_1t_lead, 0)})
@@ -214,7 +214,7 @@ export function WhereVotesRemain({ snapshot }: WhereVotesRemainProps) {
           >
             <div className="flex items-center gap-1.5 text-xs font-medium text-slate-700 dark:text-zinc-300">
               <span className={`h-2 w-2 shrink-0 rounded-full ${theme2.barClass}`} aria-hidden="true" />
-              <span>{cand2.ballot_name.toUpperCase().includes('FLAVIO') || cand2.ballot_name.toUpperCase().includes('FLÁVIO') ? 'FLÁVIO' : formatOfficialCandidateName(cand2.ballot_name)} no 1ºT</span>
+              <span>Onde {formatOfficialCandidateName(cand2.ballot_name)} liderou no 1ºT</span>
             </div>
             <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white tracking-tight font-mono">
               {formatCompactNumber(pending.remaining_in_cand2_1t_lead)} ({formatPct(pending.pct_remaining_in_cand2_1t_lead, 0)})

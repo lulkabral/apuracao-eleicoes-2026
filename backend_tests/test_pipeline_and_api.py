@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import shutil
 import pytest
 import httpx
@@ -11,6 +12,10 @@ from backend.config import Settings, ROOT_DIR
 from backend.main import create_app
 
 
+@pytest.mark.skipif(
+    os.getenv("RUN_TSE_INTEGRATION") != "1",
+    reason="Integração real: acessa o TSE e grava em backend/data. Use RUN_TSE_INTEGRATION=1.",
+)
 @pytest.mark.asyncio
 async def test_full_2026_pipeline_0_to_100_and_api(tmp_path: Path) -> None:
     """Executa a descoberta real de 2026 no servidor TSE, carrega o cache do 1º turno,

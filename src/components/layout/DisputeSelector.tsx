@@ -18,6 +18,7 @@ import type {
   ElectionCatalogSnapshot,
 } from '../../types/election'
 import type { SimulationStage } from '../../hooks/useElectionSnapshot'
+import { SIMULATION_ENABLED } from '../../utils/flags'
 import type { ThemeMode } from '../../hooks/useTheme'
 import { StateFlag } from '../common/StateFlag'
 import { getDisputePairThemes } from '../../utils/candidatePalette'
@@ -40,11 +41,13 @@ interface DisputeSelectorProps {
   onToggleFocusMode?: () => void
 }
 
+// 'live' é o dado real do TSE — nunca rotular como "65% (Padrão)".
 const STAGE_OPTIONS: { id: SimulationStage; label: string }[] = [
+  { id: 'live', label: 'Ao vivo (TSE)' },
   { id: '0pct', label: '0%' },
   { id: '25pct', label: '25%' },
   { id: '50tie', label: '50%' },
-  { id: 'live', label: '65% (Padrão)' },
+  { id: '65pct', label: '65%' },
   { id: '88pct', label: '88%' },
   { id: '100pct', label: '100%' },
 ]
@@ -102,34 +105,19 @@ export function DisputeSelector({
     }
   }, [])
 
-  const disputes: DisputeCatalogItem[] = catalog?.disputes ?? [
-    {
-      dispute_id: 'presidente',
-      cargo_code: '1',
-      cargo_name: 'Presidente',
-      uf: 'BR',
-      uf_name: 'Brasil',
-      route_path: '/presidente',
-      snapshot_url: '/snapshots/presidente/latest.json',
-      pct_counted: 65.0,
-      cand1_name: 'LULA',
-      cand1_number: '13',
-      cand1_pct: 49.1,
-      cand2_name: 'FLÁVIO BOLSONARO',
-      cand2_number: '22',
-      cand2_pct: 50.9,
-      updated_at_hms: '18:45:22',
-      validation_status: 'ok',
-    },
-  ]
+  // Sem catálogo ainda: não inventa percentuais. As abas aparecem quando o poller publicar.
+  const disputes: DisputeCatalogItem[] = catalog?.disputes ?? []
 
-  const currentDispute =
+  const currentDispute: DisputeCatalogItem | undefined =
     disputes.find((d) => d.dispute_id === selectedDisputeId) ?? disputes[0]
   const presDispute = disputes.find((d) => d.cargo_code === '1') ?? disputes[0]
   const govDisputes = disputes.filter((d) => d.cargo_code !== '1')
-  const isGovSelected = currentDispute.cargo_code !== '1'
+  // Sem catálogo (C3), currentDispute/presDispute são undefined: nada de abas, sem quebrar a tela.
+  const isGovSelected =
+    currentDispute !== undefined && currentDispute.cargo_code !== '1'
 
   const handleShare = async () => {
+    if (!currentDispute) return
     const shareUrl = `${window.location.origin}${currentDispute.route_path}`
     const shareTitle = `Apuração 2º Turno 2026 — ${
       currentDispute.cargo_code === '1'
@@ -279,17 +267,20 @@ export function DisputeSelector({
                     <Activity className="h-3.5 w-3.5" aria-hidden="true" />
                     <span>Status</span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsMoreMenuOpen(false)
-                      setIsSimulationOpen((prev) => !prev)
-                    }}
-                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-                  >
-                    <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Simulação</span>
-                  </button>
+                  {/* Simulação: só em builds com VITE_ENABLE_SIMULATION=true (correção C2) */}
+                  {SIMULATION_ENABLED && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsMoreMenuOpen(false)
+                        setIsSimulationOpen((prev) => !prev)
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                    >
+                      <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Simulação</span>
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -321,7 +312,7 @@ export function DisputeSelector({
           className="mt-2 flex items-center gap-2"
         >
           {/* Aba Presidente (BR) */}
-          {(() => {
+          {presDispute && (() => {
             const isSelected =
               presDispute.dispute_id === selectedDisputeId && !isReplayMode
             const [t1, t2] = getDisputePairThemes(
@@ -465,10 +456,12 @@ export function DisputeSelector({
         {(isSimulationOpen || isReplayMode) && !isFocusMode && (
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300/80 bg-amber-50/80 p-2 text-xs dark:border-amber-900/60 dark:bg-amber-950/30">
             <div className="flex flex-wrap items-center gap-1">
-              <span className="mr-1 text-[11px] font-semibold text-amber-900 dark:text-amber-300">
-                Simular estágio:
-              </span>
-              {STAGE_OPTIONS.map((opt) => {
+              {SIMULATION_ENABLED && (
+                <span className="mr-1 text-[11px] font-semibold text-amber-900 dark:text-amber-300">
+                  Simular estágio:
+                </span>
+              )}
+              {(SIMULATION_ENABLED ? STAGE_OPTIONS : []).map((opt) => {
                 const active = !isReplayMode && stage === opt.id
                 return (
                   <button

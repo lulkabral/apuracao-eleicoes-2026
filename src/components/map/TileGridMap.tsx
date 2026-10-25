@@ -1,3 +1,4 @@
+import { Globe } from 'lucide-react'
 import type { LocalityDataItem } from '../../types/election'
 import { formatPct, formatSignedPP } from '../../utils/formatters'
 import {
@@ -201,7 +202,14 @@ export function TileGridMap({
               )}
 
               <span className="relative z-10 flex w-full items-center justify-between px-0.5 text-[10px] font-extrabold leading-none sm:text-xs">
-                <span>{tile.uf}</span>
+                {tile.uf === 'ZZ' ? (
+                  // Exterior: globo no lugar da sigla "ZZ", que não diz nada a quem visita
+                  <span title="Exterior" className="inline-flex">
+                    <Globe className="h-3 w-3 sm:h-3.5 sm:w-3.5" aria-hidden="true" />
+                  </span>
+                ) : (
+                  <span>{tile.uf}</span>
+                )}
                 {loc.low_reliability && (
                   <span
                     title="Menos de 30% apurado"
