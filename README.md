@@ -374,8 +374,8 @@ DISABLE_STARTUP_POLLER=1 .venv/bin/python3 scripts/load_test.py
 
 ## 11. Licença e Créditos
 
-Distribuído sob a licença MIT. Consulte o arquivo `LICENSE` para mais informações.
+Distribuído sob a licença MIT. Consulte o arquivo LICENSE para mais informações.
 
-- Co-criador e Desenvolvimento Frontend/Cartografia: Luan Lopes ([@alcoholicgoatt](https://x.com/alcoholicgoatt) / [lulkabral](https://github.com/lulkabral))
-- Co-criador e Desenvolvimento Backend/Engenharia de Dados: Carlos Eduardo ([@1njusto](https://x.com/1njusto) / [0justo](https://github.com/0justo))
-- Fonte Oficial de Dados: Tribunal Superior Eleitoral ([https://resultados.tse.jus.br](https://resultados.tse.jus.br))
+- Idealizador, Co-criador e Desenvolvimento Frontend/Cartografia: Luan Lopes (@alcoholicgoatt / lulkabral)
+- Co-criador e Desenvolvimento Backend/Engenharia de Dados: Carlos Eduardo (@1njusto / 0justo)
+- Fonte Oficial de Dados: Tribunal Superior Eleitoral (https://resultados.tse.jus.br)
